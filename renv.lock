@@ -1,0 +1,28 @@
+{
+  "R": {
+    "Version": "4.3.3",
+    "Repositories": [
+      {
+        "Name": "CRAN",
+        "URL": "https://cran.r-project.org"
+      }
+    ]
+  },
+  "Packages": {
+    "tuikr": {
+      "Package": "tuikr",
+      "Version": "0.1.0",
+      "Source": "GitHub",
+      "RemoteType": "github",
+      "RemoteUsername": "emraher",
+      "RemoteRepo": "tuikr"
+    },
+    "httr": {"Package": "httr", "Version": "1.4.7", "Source": "Repository"},
+    "readxl": {"Package": "readxl", "Version": "1.4.3", "Source": "Repository"},
+    "dplyr": {"Package": "dplyr", "Version": "1.1.4", "Source": "Repository"},
+    "tidyr": {"Package": "tidyr", "Version": "1.3.1", "Source": "Repository"},
+    "ggplot2": {"Package": "ggplot2", "Version": "3.5.1", "Source": "Repository"},
+    "knitr": {"Package": "knitr", "Version": "1.46", "Source": "Repository"},
+    "scales": {"Package": "scales", "Version": "1.3.0", "Source": "Repository"}
+  }
+}
