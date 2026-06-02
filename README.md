@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-This project forecasts the total number of monthly births in Turkey using time series data obtained directly from the TÜu130K Data Portal via the `tuikr` R package. Ten forecasting methods are applied, compared, and the superior method is selected to produce a forecast for January 2026.
+This project forecasts the total number of monthly births in Turkey using time series data obtained directly from the TUIK Data Portal via the `tuikr` R package. Ten forecasting methods are applied, compared, and the superior method is selected to produce a forecast for January 2026.
 
 ## 2. Data Source and Tuik Connection
 
@@ -60,7 +60,7 @@ The series has a clear downward trend and strong monthly seasonality. Regression
 
 - **Superior method:** Regression with Trend and Seasonal Dummy Variables
 - **Date of data access:** June 2026
-- **Latest available TÜu130K observation:** December 2025
+- **Latest available TUIK observation:** December 2025
 - **Forecast target period:** January 2026
 - **Forecasted value:** See outputs/tables/final_forecast.csv
 
