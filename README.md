@@ -1,14 +1,14 @@
-# TÜu130K Forecasting Project
+# Tuik Forecasting Project
 
 ## 1. Project Overview
 
 This project forecasts the total number of monthly births in Turkey using time series data obtained directly from the TÜu130K Data Portal via the `tuikr` R package. Ten forecasting methods are applied, compared, and the superior method is selected to produce a forecast for January 2026.
 
-## 2. Data Source and TÜu130K Connection
+## 2. Data Source and Tuik Connection
 
-- **TÜu130K data set name:** Births by sex and month, 2001-2025
-- **TÜu130K theme/category:** Population and Demography (Theme 11)
-- **TÜu130K table name:** Births by sex and month, 2001-2025
+- **Tuik data set name:** Births by sex and month, 2001-2025
+- **Tuik theme/category:** Population and Demography (Theme 11)
+- **Tuik table name:** Births by sex and month, 2001-2025
 - **tuikr Dataflow ID:** NA — istab table accessed via tuikr::statistical_tables("11")
 - **Selected variable:** Total monthly births (Toplam-Total)
 - **Data frequency:** Monthly
@@ -22,9 +22,9 @@ This project forecasts the total number of monthly births in Turkey using time s
 
 This project forecasts the total number of births in Turkey for January 2026. Monthly birth statistics reflect demographic trends and fertility rates, making them a meaningful variable for forecasting.
 
-## 4. Use of TÜu130K Data in R
+## 4. Use of Tuik Data in R
 
-Data were accessed directly from TÜu130K using tuikr::statistical_tables("11"). No manually prepared, edited, or newly created dataset was used. R-based cleaning included: year column filled down, wide-to-long transformation, numeric conversion.
+Data were accessed directly from Tuik using tuikr::statistical_tables("11"). No manually prepared, edited, or newly created dataset was used. R-based cleaning included: year column filled down, wide-to-long transformation, numeric conversion.
 
 ## 5. Exploratory Time Series Analysis
 
@@ -72,7 +72,7 @@ Turkey birth rate has been declining since 2015. January is historically one of 
 
 - Model assumes historical trend and seasonality continue into 2026
 - Economic shocks or policy changes could alter the pattern
-- Data revisions by TÜu130K may affect results
+- Data revisions by Tuik may affect results
 
 ## 12. Reproducibility
 
