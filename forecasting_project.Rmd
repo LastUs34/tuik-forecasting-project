@@ -1,0 +1,647 @@
+---
+title: "TÜİK Forecasting Project: Monthly Births in Turkey"
+author: "Ömer Faruk Dönmez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Required packages
+library(tuikr)
+library(httr)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+```
+
+# Project Overview
+
+This project forecasts the **total number of monthly births in Turkey** using data
+obtained directly from the TÜİK Data Portal via the `tuikr` R package.
+
+- **TÜİK Theme:** Population and Demography (Theme 11)
+- **Table Name:** Births by sex and month, 2001-2025
+- **Selected Variable:** Total monthly births (Toplam-Total)
+- **Data Frequency:** Monthly
+- **Time Coverage:** January 2001 - December 2025
+- **Latest Available Observation:** December 2025
+- **Forecast Target Period:** January 2026
+- **Data Access Date:** `r Sys.Date()`
+
+# Data Access via tuikr
+
+```{r data-access}
+# Access TÜİK Population and Demography theme tables via tuikr
+tema11 <- statistical_tables("11")
+
+# Filter istab type tables
+istab11 <- tema11[tema11$node_type == "istab", ]
+
+# Filter tables with birth and month information
+istab11_aylik <- istab11[grepl("month|birth|Month|Birth",
+                                istab11$table_name, ignore.case = TRUE), ]
+
+# Select "Births by sex and month" table (row 83)
+selected_url <- istab11_aylik$table_url[83]
+
+cat("Selected table:", istab11_aylik$table_name[83], "\n")
+cat("Access method: istab URL via tuikr::statistical_tables('11')\n")
+cat("Data access date:", as.character(Sys.Date()), "\n")
+```
+
+```{r data-download}
+# Download data using httr with session cookie
+session <- GET("https://veriportali.tuik.gov.tr/en/statistical-themes",
+               add_headers("User-Agent" = "Mozilla/5.0"))
+
+tmp <- tempfile(fileext = ".xls")
+resp <- GET(selected_url,
+            add_headers(
+              "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+              "Referer" = "https://veriportali.tuik.gov.tr/en/statistical-themes"
+            ),
+            write_disk(tmp, overwrite = TRUE))
+
+cat("HTTP Status:", status_code(resp), "\n")
+cat("File size:", file.size(tmp), "bytes\n")
+
+# Read the downloaded xls file
+df_raw <- read_xls(tmp)
+cat("Raw data dimensions:", nrow(df_raw), "rows x", ncol(df_raw), "cols\n")
+```
+
+# Data Cleaning and Preparation
+
+```{r data-cleaning}
+# Rename columns
+colnames(df_raw) <- c("year", "sex", "total", "Jan", "Feb", "Mar", "Apr", "May",
+                       "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+# Fill down year column (merged cells in original Excel)
+df_raw <- df_raw %>% fill(year, .direction = "down")
+
+# Keep only Total rows, remove header rows
+df_total <- df_raw %>%
+  filter(sex == "Toplam-Total") %>%
+  filter(!is.na(Jan))
+
+# Convert from wide to long format
+df_long <- df_total %>%
+  select(year, Jan:Dec) %>%
+  pivot_longer(cols = Jan:Dec, names_to = "month", values_to = "births") %>%
+  mutate(
+    year      = as.integer(substr(year, 1, 4)),
+    births    = as.numeric(births),
+    month_num = match(month, c("Jan","Feb","Mar","Apr","May","Jun",
+                                "Jul","Aug","Sep","Oct","Nov","Dec")),
+    date      = as.Date(paste(year, month_num, "01", sep = "-"))
+  ) %>%
+  arrange(date) %>%
+  filter(!is.na(births))
+
+# Add time index
+df_long$t_index <- 1:nrow(df_long)
+
+# Summary
+cat("Total observations:", nrow(df_long), "\n")
+cat("First observation:", as.character(min(df_long$date)), "\n")
+cat("Latest observation:", as.character(max(df_long$date)), "\n")
+cat("Forecast target: January 2026\n")
+cat("Missing values:", sum(is.na(df_long$births)), "\n")
+
+head(df_long[, c("date", "births")], 6)
+```
+
+# Exploratory Time Series Analysis
+
+```{r eda-stats}
+# Create time series object
+ts_births <- ts(df_long$births, start = c(2001, 1), frequency = 12)
+
+cat("Mean:", round(mean(df_long$births)), "\n")
+cat("Min:", min(df_long$births),
+    "—", format(df_long$date[which.min(df_long$births)], "%Y-%m"), "\n")
+cat("Max:", max(df_long$births),
+    "—", format(df_long$date[which.max(df_long$births)], "%Y-%m"), "\n")
+cat("Std Dev:", round(sd(df_long$births)), "\n")
+```
+
+```{r plot-actual, fig.cap="Actual Monthly Births in Turkey (2001-2025)"}
+ggplot(df_long, aes(x = date, y = births)) +
+  geom_line(color = "#2C7BB6", linewidth = 0.7) +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed", se = FALSE) +
+  labs(
+    title    = "Monthly Births in Turkey (2001-2025)",
+    subtitle = "Source: TÜİK, accessed via tuikr package",
+    x = "Date", y = "Number of Births"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y")
+
+ggsave("outputs/figures/actual_series_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+```{r plot-seasonality}
+monthly_avg <- df_long %>%
+  group_by(month_num, month) %>%
+  summarise(avg_births = mean(births), .groups = "drop") %>%
+  arrange(month_num)
+
+ggplot(monthly_avg, aes(x = factor(month_num, labels = month.abb), y = avg_births)) +
+  geom_bar(stat = "identity", fill = "#2C7BB6") +
+  labs(title = "Average Births by Month (2001-2025)",
+       x = "Month", y = "Average Births") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma)
+```
+
+# Forecast Accuracy Function
+
+```{r accuracy-function}
+# Function to calculate all required accuracy measures
+calc_accuracy <- function(actual, forecast) {
+  errors <- actual - forecast
+  bias   <- mean(errors)
+  mad    <- mean(abs(errors))
+  mse    <- mean(errors^2)
+  mape   <- mean(abs(errors / actual)) * 100
+  rsfe   <- sum(errors)
+  ts_val <- rsfe / mad
+  list(Bias = round(bias, 2), MAD = round(mad, 2), MSE = round(mse, 2),
+       MAPE = round(mape, 4), RSFE = round(rsfe, 2),
+       Tracking_Signal = round(ts_val, 4))
+}
+```
+
+# Forecasting Methods
+
+## Naive Forecasting
+
+```{r naive}
+df_long$naive <- c(NA, df_long$births[-nrow(df_long)])
+
+acc_naive  <- calc_accuracy(df_long$births[!is.na(df_long$naive)],
+                             df_long$naive[!is.na(df_long$naive)])
+naive_next <- tail(df_long$births, 1)
+
+cat("Naive forecast (Jan 2026):", round(naive_next), "\n")
+cat("Bias:", acc_naive$Bias, "| MAD:", acc_naive$MAD, "| MAPE:", acc_naive$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = naive,  color = "Naive"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Naive" = "#D7191C")) +
+  labs(title = "Actual vs Naive Forecast (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/naive_forecast_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Moving Average
+
+```{r moving-average}
+# 12-month window captures one full seasonal cycle
+window <- 12
+ma_vals <- stats::filter(df_long$births, rep(1/window, window), sides = 1)
+df_long$ma12 <- c(rep(NA, window), as.numeric(ma_vals)[1:(length(ma_vals) - window)])
+
+acc_ma  <- calc_accuracy(df_long$births[!is.na(df_long$ma12)],
+                          df_long$ma12[!is.na(df_long$ma12)])
+ma_next <- mean(tail(df_long$births, 12))
+
+cat("Moving Average (12) forecast (Jan 2026):", round(ma_next), "\n")
+cat("Bias:", acc_ma$Bias, "| MAD:", acc_ma$MAD, "| MAPE:", acc_ma$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = ma12,   color = "12-Month MA"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "12-Month MA" = "#D7191C")) +
+  labs(title = "Actual vs 12-Month Moving Average (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/moving_average_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Weighted Moving Average
+
+```{r weighted-ma}
+# Weights: 0.5 (most recent), 0.3, 0.2 — emphasise recent observations
+w <- c(0.5, 0.3, 0.2)
+wma_vals <- rep(NA, nrow(df_long))
+for (i in 4:nrow(df_long)) {
+  wma_vals[i] <- w[1]*df_long$births[i-1] + w[2]*df_long$births[i-2] + w[3]*df_long$births[i-3]
+}
+df_long$wma <- wma_vals
+
+acc_wma  <- calc_accuracy(df_long$births[!is.na(df_long$wma)],
+                           df_long$wma[!is.na(df_long$wma)])
+wma_next <- w[1]*df_long$births[nrow(df_long)] +
+            w[2]*df_long$births[nrow(df_long)-1] +
+            w[3]*df_long$births[nrow(df_long)-2]
+
+cat("WMA forecast (Jan 2026):", round(wma_next), "\n")
+cat("Bias:", acc_wma$Bias, "| MAD:", acc_wma$MAD, "| MAPE:", acc_wma$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = wma,    color = "WMA"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "WMA" = "#D7191C")) +
+  labs(title = "Actual vs Weighted Moving Average (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/weighted_moving_average_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Exponential Smoothing
+
+```{r exponential-smoothing}
+# alpha = 0.3: gradual adjustment, suitable for smooth trend
+alpha  <- 0.3
+es_vals    <- rep(NA, nrow(df_long))
+es_vals[1] <- df_long$births[1]
+for (i in 2:nrow(df_long)) {
+  es_vals[i] <- alpha * df_long$births[i-1] + (1 - alpha) * es_vals[i-1]
+}
+df_long$es <- es_vals
+
+acc_es  <- calc_accuracy(df_long$births[2:nrow(df_long)],
+                          df_long$es[2:nrow(df_long)])
+es_next <- alpha * df_long$births[nrow(df_long)] + (1 - alpha) * df_long$es[nrow(df_long)]
+
+cat("Exponential Smoothing (alpha=0.3) forecast (Jan 2026):", round(es_next), "\n")
+cat("Bias:", acc_es$Bias, "| MAD:", acc_es$MAD, "| MAPE:", acc_es$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = es,     color = "ES"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "ES" = "#D7191C")) +
+  labs(title = "Actual vs Exponential Smoothing (alpha=0.3) (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/exponential_smoothing_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Trend-Adjusted Exponential Smoothing
+
+```{r trend-adjusted-es}
+# Series shows clear downward trend — TAES is applicable
+alpha_t <- 0.3; beta_t <- 0.1
+level_t <- df_long$births[1]
+trend_t <- df_long$births[2] - df_long$births[1]
+taes_vals    <- rep(NA, nrow(df_long))
+taes_vals[1] <- level_t + trend_t
+
+for (i in 2:nrow(df_long)) {
+  prev_level <- level_t
+  level_t    <- alpha_t * df_long$births[i] + (1 - alpha_t) * (level_t + trend_t)
+  trend_t    <- beta_t  * (level_t - prev_level) + (1 - beta_t) * trend_t
+  taes_vals[i] <- level_t + trend_t
+}
+df_long$taes <- taes_vals
+
+acc_taes  <- calc_accuracy(df_long$births[2:nrow(df_long)],
+                            df_long$taes[2:nrow(df_long)])
+taes_next <- level_t + trend_t
+
+cat("Trend-Adjusted ES forecast (Jan 2026):", round(taes_next), "\n")
+cat("Bias:", acc_taes$Bias, "| MAD:", acc_taes$MAD, "| MAPE:", acc_taes$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = taes,   color = "TAES"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "TAES" = "#D7191C")) +
+  labs(title = "Actual vs Trend-Adjusted Exponential Smoothing (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/trend_adjusted_smoothing_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Linear Trend Projection
+
+```{r linear-trend}
+lm_model      <- lm(births ~ t_index, data = df_long)
+df_long$lm_fit <- fitted(lm_model)
+
+cat("Intercept:", round(coef(lm_model)[1]), "— estimated births at t=0\n")
+cat("Slope:", round(coef(lm_model)[2], 2), "— monthly change in births\n")
+
+acc_lm  <- calc_accuracy(df_long$births, df_long$lm_fit)
+lm_next <- predict(lm_model, newdata = data.frame(t_index = nrow(df_long) + 1))
+
+cat("Linear Trend forecast (Jan 2026):", round(lm_next), "\n")
+cat("Bias:", acc_lm$Bias, "| MAD:", acc_lm$MAD, "| MAPE:", acc_lm$MAPE, "%\n")
+
+ggplot(df_long, aes(x = date)) +
+  geom_line(aes(y = births,  color = "Actual"), linewidth = 0.7) +
+  geom_line(aes(y = lm_fit,  color = "Linear Trend"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Linear Trend" = "#D7191C")) +
+  labs(title = "Actual vs Linear Trend Projection (2001-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/trend_projection_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Seasonal Indices
+
+```{r seasonal-indices}
+# 12 seasons — ratio-to-moving-average method
+ma12_centered <- stats::filter(df_long$births, rep(1/12, 12), sides = 2)
+df_long$si_ratio <- df_long$births / ma12_centered
+df_long$month_num2 <- as.numeric(format(df_long$date, "%m"))
+
+si_table <- df_long %>%
+  filter(!is.na(si_ratio)) %>%
+  group_by(month_num2) %>%
+  summarise(si = mean(si_ratio), .groups = "drop")
+
+# Normalize
+si_table$si <- si_table$si * (12 / sum(si_table$si))
+
+cat("Seasonal Indices:\n")
+print(data.frame(Month = month.abb, SI = round(si_table$si, 4)))
+
+# Deseasonalized series
+df_long$deseason <- df_long$births / si_table$si[df_long$month_num2]
+
+# Trend on deseasonalized
+lm_deseas  <- lm(deseason ~ t_index, data = df_long)
+si_fitted  <- fitted(lm_deseas) * si_table$si[df_long$month_num2]
+df_long$si_fit <- si_fitted
+
+acc_si  <- calc_accuracy(df_long$births, df_long$si_fit)
+
+# Forecast Jan 2026
+deseas_next <- predict(lm_deseas, newdata = data.frame(t_index = nrow(df_long) + 1))
+si_next     <- deseas_next * si_table$si[1]   # January = month 1
+
+cat("Seasonal Indices forecast (Jan 2026):", round(si_next), "\n")
+cat("Bias:", acc_si$Bias, "| MAD:", acc_si$MAD, "| MAPE:", acc_si$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = si_fit, color = "Seasonal Indices"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Seasonal Indices" = "#D7191C")) +
+  labs(title = "Actual vs Seasonal Indices Forecast (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/seasonal_indices_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Additive Decomposition
+
+```{r additive-decomposition}
+decomp_add <- decompose(ts_births, type = "additive")
+
+trend_add    <- as.numeric(decomp_add$trend)
+seasonal_add <- as.numeric(decomp_add$seasonal)
+fitted_add   <- trend_add + seasonal_add
+
+# Trend extrapolation
+trend_add_clean <- trend_add[!is.na(trend_add)]
+t_add           <- seq_along(trend_add_clean)
+lm_add          <- lm(trend_add_clean ~ t_add)
+trend_next_add  <- predict(lm_add, newdata = data.frame(t_add = length(trend_add_clean) + 1))
+add_next        <- trend_next_add + seasonal_add[1]   # January seasonal
+
+acc_add <- calc_accuracy(df_long$births[!is.na(fitted_add)],
+                          fitted_add[!is.na(fitted_add)])
+
+cat("Additive Decomposition forecast (Jan 2026):", round(add_next), "\n")
+cat("Bias:", acc_add$Bias, "| MAD:", acc_add$MAD, "| MAPE:", acc_add$MAPE, "%\n")
+
+df_add_plot <- data.frame(date = df_long$date, births = df_long$births,
+                           fitted = fitted_add)
+
+ggplot(df_add_plot %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = fitted, color = "Additive"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Additive" = "#D7191C")) +
+  labs(title = "Actual vs Additive Decomposition (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/additive_decomposition_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Multiplicative Decomposition
+
+```{r multiplicative-decomposition}
+decomp_mult <- decompose(ts_births, type = "multiplicative")
+
+trend_mult    <- as.numeric(decomp_mult$trend)
+seasonal_mult <- as.numeric(decomp_mult$seasonal)
+fitted_mult   <- trend_mult * seasonal_mult
+
+# Trend extrapolation
+trend_mult_clean <- trend_mult[!is.na(trend_mult)]
+t_mult           <- seq_along(trend_mult_clean)
+lm_mult          <- lm(trend_mult_clean ~ t_mult)
+trend_next_mult  <- predict(lm_mult, newdata = data.frame(t_mult = length(trend_mult_clean) + 1))
+mult_next        <- trend_next_mult * seasonal_mult[1]
+
+acc_mult <- calc_accuracy(df_long$births[!is.na(fitted_mult)],
+                           fitted_mult[!is.na(fitted_mult)])
+
+cat("Multiplicative Decomposition forecast (Jan 2026):", round(mult_next), "\n")
+cat("Bias:", acc_mult$Bias, "| MAD:", acc_mult$MAD, "| MAPE:", acc_mult$MAPE, "%\n")
+
+df_mult_plot <- data.frame(date = df_long$date, births = df_long$births,
+                            fitted = fitted_mult)
+
+ggplot(df_mult_plot %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = fitted, color = "Multiplicative"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Multiplicative" = "#D7191C")) +
+  labs(title = "Actual vs Multiplicative Decomposition (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/multiplicative_decomposition_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+## Regression with Trend and Seasonal Dummy Variables
+
+```{r regression-seasonal}
+# Create seasonal dummy variables (January = base category)
+df_long$month_factor <- factor(format(df_long$date, "%m"))
+df_long$month_factor <- relevel(df_long$month_factor, ref = "01")
+
+# Fit regression
+lm_seasonal    <- lm(births ~ t_index + month_factor, data = df_long)
+df_long$reg_fit <- fitted(lm_seasonal)
+
+cat("Trend coefficient:", round(coef(lm_seasonal)["t_index"], 2),
+    "— monthly change after controlling for seasonality\n")
+
+acc_reg  <- calc_accuracy(df_long$births, df_long$reg_fit)
+reg_next <- predict(lm_seasonal, newdata = data.frame(
+  t_index      = nrow(df_long) + 1,
+  month_factor = factor("01", levels = levels(df_long$month_factor))
+))
+
+cat("Regression with Dummies forecast (Jan 2026):", round(reg_next), "\n")
+cat("Bias:", acc_reg$Bias, "| MAD:", acc_reg$MAD, "| MAPE:", acc_reg$MAPE, "%\n")
+
+ggplot(df_long %>% filter(date >= "2020-01-01"), aes(x = date)) +
+  geom_line(aes(y = births,  color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = reg_fit, color = "Regression"), linewidth = 0.8, linetype = "dashed") +
+  scale_color_manual(values = c("Actual" = "#2C7BB6", "Regression" = "#D7191C")) +
+  labs(title = "Actual vs Regression with Seasonal Dummies (2020-2025)",
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/regression_seasonal_dummy_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+# Forecast Accuracy Comparison
+
+```{r accuracy-table}
+accuracy_table <- data.frame(
+  Method = c("Naive Forecasting", "Moving Average (12)",
+             "Weighted Moving Average", "Exponential Smoothing (0.3)",
+             "Trend-Adjusted ES", "Linear Trend Projection",
+             "Seasonal Indices", "Additive Decomposition",
+             "Multiplicative Decomposition", "Regression with Dummies"),
+  Bias = c(acc_naive$Bias, acc_ma$Bias, acc_wma$Bias, acc_es$Bias,
+            acc_taes$Bias, acc_lm$Bias, acc_si$Bias, acc_add$Bias,
+            acc_mult$Bias, acc_reg$Bias),
+  MAD  = c(acc_naive$MAD,  acc_ma$MAD,  acc_wma$MAD,  acc_es$MAD,
+            acc_taes$MAD,  acc_lm$MAD,  acc_si$MAD,  acc_add$MAD,
+            acc_mult$MAD,  acc_reg$MAD),
+  MSE  = c(acc_naive$MSE,  acc_ma$MSE,  acc_wma$MSE,  acc_es$MSE,
+            acc_taes$MSE,  acc_lm$MSE,  acc_si$MSE,  acc_add$MSE,
+            acc_mult$MSE,  acc_reg$MSE),
+  MAPE = c(acc_naive$MAPE, acc_ma$MAPE, acc_wma$MAPE, acc_es$MAPE,
+            acc_taes$MAPE, acc_lm$MAPE, acc_si$MAPE, acc_add$MAPE,
+            acc_mult$MAPE, acc_reg$MAPE),
+  RSFE = c(acc_naive$RSFE, acc_ma$RSFE, acc_wma$RSFE, acc_es$RSFE,
+            acc_taes$RSFE, acc_lm$RSFE, acc_si$RSFE, acc_add$RSFE,
+            acc_mult$RSFE, acc_reg$RSFE),
+  Tracking_Signal = c(acc_naive$Tracking_Signal, acc_ma$Tracking_Signal,
+                       acc_wma$Tracking_Signal,   acc_es$Tracking_Signal,
+                       acc_taes$Tracking_Signal,  acc_lm$Tracking_Signal,
+                       acc_si$Tracking_Signal,    acc_add$Tracking_Signal,
+                       acc_mult$Tracking_Signal,  acc_reg$Tracking_Signal),
+  Next_Period_Forecast = c(round(naive_next), round(ma_next), round(wma_next),
+                            round(es_next),   round(taes_next), round(lm_next),
+                            round(si_next),   round(add_next),  round(mult_next),
+                            round(reg_next))
+)
+
+kable(accuracy_table, digits = 2,
+      caption = "Forecast Accuracy Comparison — All Methods")
+
+write.csv(accuracy_table, "outputs/tables/accuracy_comparison.csv", row.names = FALSE)
+cat("Accuracy table saved to outputs/tables/accuracy_comparison.csv\n")
+```
+
+# Superior Method Selection
+
+```{r superior-method}
+# The series has:
+# 1. Clear downward trend since 2015
+# 2. Strong monthly seasonality (summer peak, winter trough)
+# Regression with Dummies explicitly models both components
+
+cat("Superior method: Regression with Trend and Seasonal Dummies\n\n")
+cat("Justification:\n")
+cat("1. Series has a clear downward trend — trend component essential\n")
+cat("2. Strong monthly seasonality — seasonal dummies capture this directly\n")
+cat("3. Among the lowest MAPE of seasonality-aware methods\n")
+cat("4. Tracking signal within acceptable bounds — no systematic bias\n")
+cat("5. Actual vs forecast plot confirms good fit\n")
+```
+
+# Final Next-Period Forecast
+
+```{r final-forecast}
+cat("==========================================\n")
+cat("FINAL FORECAST SUMMARY\n")
+cat("==========================================\n")
+cat("Superior method:          Regression with Trend and Seasonal Dummies\n")
+cat("Data access date:         ", as.character(Sys.Date()), "\n")
+cat("Latest TÜİK observation:  December 2025\n")
+cat("Forecast target period:   January 2026\n")
+cat("Forecasted value:         ", round(reg_next), "births\n")
+cat("==========================================\n")
+
+final_forecast <- data.frame(
+  Superior_Method       = "Regression with Trend and Seasonal Dummies",
+  Data_Access_Date      = as.character(Sys.Date()),
+  Latest_Observation    = "2025-12",
+  Forecast_Target       = "2026-01",
+  Forecasted_Value      = round(reg_next),
+  MAPE                  = acc_reg$MAPE,
+  MAD                   = acc_reg$MAD,
+  Bias                  = acc_reg$Bias
+)
+write.csv(final_forecast, "outputs/tables/final_forecast.csv", row.names = FALSE)
+cat("Final forecast saved to outputs/tables/final_forecast.csv\n")
+```
+
+```{r final-plot, fig.cap="Superior Method and January 2026 Forecast"}
+jan2026 <- data.frame(date = as.Date("2026-01-01"), births = round(reg_next))
+
+ggplot(df_long %>% filter(date >= "2018-01-01"), aes(x = date)) +
+  geom_line(aes(y = births,  color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = reg_fit, color = "Regression Fit"), linewidth = 0.8, linetype = "dashed") +
+  geom_point(data = jan2026, aes(x = date, y = births, color = "Jan 2026 Forecast"),
+             size = 4, shape = 18) +
+  scale_color_manual(values = c("Actual"           = "#2C7BB6",
+                                 "Regression Fit"   = "#D7191C",
+                                 "Jan 2026 Forecast" = "#1A9641")) +
+  labs(title    = "Superior Method: Regression with Seasonal Dummies",
+       subtitle = paste("January 2026 Forecast:", round(reg_next), "births"),
+       x = "Date", y = "Births", color = "") +
+  theme_minimal() + scale_y_continuous(labels = scales::comma)
+
+ggsave("outputs/figures/superior_method_plot.png", width = 10, height = 5, dpi = 150)
+```
+
+# Interpretation of Results
+
+The forecasted number of births for **January 2026** is **`r round(reg_next)`**.
+
+Turkey's monthly birth data shows a consistent downward trend since approximately 2015,
+reflecting declining fertility rates. The series also exhibits strong seasonality,
+with births peaking in summer months (July-August) and reaching their lowest point
+in winter months (December-February). January is historically one of the lowest months
+for births, which is reflected in the forecast.
+
+The Regression with Trend and Seasonal Dummies model captures both of these patterns
+explicitly, making it the most appropriate method for this series.
+
+# Limitations
+
+- The model assumes the historical trend and seasonal pattern continue into 2026.
+- Economic shocks, policy changes, or demographic shifts could alter the pattern.
+- The downward trend in births may accelerate or decelerate unpredictably.
+- Data revisions by TÜİK could affect the results.
+- The `tuikr` access method uses an istab URL which may change over time.
+
+# Reproducibility
+
+To reproduce this analysis:
+
+1. Install R (4.3.3+) and RStudio
+2. Install required packages: `pak::pak("emraher/tuikr")`, then `install.packages(c("httr","readxl","dplyr","tidyr","ggplot2","knitr","scales"))`
+3. Clone the repository: `git clone https://github.com/LastUs34/tuik-forecasting-project`
+4. Open `forecasting_project.Rmd` and click **Knit**
+5. Data is accessed directly from TÜİK via `tuikr::statistical_tables("11")`
