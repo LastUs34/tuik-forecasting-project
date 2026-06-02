@@ -62,7 +62,7 @@ The series has a clear downward trend and strong monthly seasonality. Regression
 - **Date of data access:** June 2026
 - **Latest available TUIK observation:** December 2025
 - **Forecast target period:** January 2026
-- **Forecasted value:** See outputs/tables/final_forecast.csv
+- **Forecasted value:** 104,950 births (January 2026)
 
 ## 10. Interpretation of Results
 
