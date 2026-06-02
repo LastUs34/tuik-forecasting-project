@@ -1,6 +1,6 @@
 ---
 title: "TÜİK Forecasting Project: Monthly Births in Turkey"
-author: "Ömer Faruk Dönmez"
+author: "Omer Faruk Donmez"
 date: "`r Sys.Date()`"
 output:
   html_document:
