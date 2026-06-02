@@ -90,7 +90,7 @@ tuik-forecasting-project/
 
 ## 14. Author
 
-- **Student name:** Öer faruk döz
+- **Student name:** Omer Faruk Donmez
 - **Student number:** 138723504
 - **Course name:** Forecasting Methods
 
